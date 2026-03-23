@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import datetime
+import hashlib
 import html
 import json
 import math
@@ -52,6 +53,13 @@ TEXT_SEARCH_EXTENSIONS = {
     ".py",
 }
 BRANDING_HINTS = ("logo", "brand", "icon", "favicon", "cover", "banner", "shanda")
+BRANDING_TEXT_PATTERNS = (
+    "MIROFISH",
+    "MiroFish",
+    "预测万物",
+    "简洁通用的群体智能引擎",
+    "A Simple and Universal Swarm Intelligence Engine",
+)
 MAX_UPLOAD_MB = 10
 RATIO_TOLERANCE = 0.03
 
@@ -272,6 +280,43 @@ def discover_image_assets() -> list[dict[str, object]]:
     return assets
 
 
+def discover_text_branding_tokens() -> list[dict[str, object]]:
+    tokens: list[dict[str, object]] = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in TEXT_SEARCH_EXTENSIONS:
+            continue
+        rel = str(path.relative_to(ROOT)).replace("\\", "/")
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+
+        for pattern in BRANDING_TEXT_PATTERNS:
+            count = content.count(pattern)
+            if count <= 0:
+                continue
+
+            token_id = hashlib.sha1(f"{rel}\n{pattern}".encode("utf-8")).hexdigest()
+            line_no = 1
+            for idx, line in enumerate(content.splitlines(), start=1):
+                if pattern in line:
+                    line_no = idx
+                    break
+
+            tokens.append(
+                {
+                    "id": token_id,
+                    "file_path": rel,
+                    "token": pattern,
+                    "occurrences": count,
+                    "line": line_no,
+                }
+            )
+
+    tokens.sort(key=lambda t: (str(t["file_path"]), str(t["token"])))
+    return tokens
+
+
 def default_whitelist(assets: list[dict[str, object]]) -> set[str]:
     items = set()
     for asset in assets:
@@ -281,23 +326,47 @@ def default_whitelist(assets: list[dict[str, object]]) -> set[str]:
     return items
 
 
-def load_whitelist(assets: list[dict[str, object]]) -> set[str]:
+def load_whitelist_data(assets: list[dict[str, object]], tokens: list[dict[str, object]]) -> dict[str, set[str]]:
     if WHITELIST_PATH.exists():
         try:
             data = json.loads(WHITELIST_PATH.read_text(encoding="utf-8"))
-            listed = data.get("assets", [])
-            return {str(x) for x in listed}
+            listed_assets = data.get("assets", [])
+            listed_tokens = data.get("text_tokens", [])
+            return {
+                "assets": {str(x) for x in listed_assets},
+                "text_tokens": {str(x) for x in listed_tokens},
+            }
         except Exception:
             pass
-    wl = default_whitelist(assets)
-    save_whitelist(wl)
+
+    wl = {
+        "assets": default_whitelist(assets),
+        "text_tokens": set(),
+    }
+    save_whitelist_data(wl["assets"], wl["text_tokens"])
     return wl
 
 
-def save_whitelist(items: set[str]) -> None:
+def save_whitelist_data(asset_items: set[str], text_token_items: set[str]) -> None:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
-    payload = {"assets": sorted(items), "max_upload_mb": MAX_UPLOAD_MB}
+    payload = {
+        "assets": sorted(asset_items),
+        "text_tokens": sorted(text_token_items),
+        "max_upload_mb": MAX_UPLOAD_MB,
+    }
     WHITELIST_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def safe_text_path(file_rel: str) -> Path:
+    target = (ROOT / file_rel).resolve()
+    root_resolved = ROOT.resolve()
+    if root_resolved not in [target] and root_resolved not in target.parents:
+        raise ValueError("Text path is outside project root")
+    if not target.exists() or not target.is_file():
+        raise ValueError("Target text file does not exist")
+    if target.suffix.lower() not in TEXT_SEARCH_EXTENSIONS:
+        raise ValueError("Target must be a whitelisted text file type")
+    return target
 
 
 def safe_asset_path(asset_rel: str) -> Path:
@@ -356,6 +425,38 @@ def replace_asset(asset_rel: str, upload_name: str, upload_bytes: bytes, whiteli
     return f"Replaced {asset_rel} (backup saved)"
 
 
+def replace_text_token(token_id: str, new_text: str, tokens: list[dict[str, object]], whitelist: set[str]) -> str:
+    if token_id not in whitelist:
+        raise ValueError("Text token is not whitelisted for replacement")
+
+    token_item = next((t for t in tokens if t["id"] == token_id), None)
+    if not token_item:
+        raise ValueError("Unknown text token")
+
+    source_token = str(token_item["token"])
+    file_path = str(token_item["file_path"])
+    updated = new_text.strip()
+    if not updated:
+        raise ValueError("Replacement text cannot be empty")
+    if len(updated) > 240:
+        raise ValueError("Replacement text too long (max 240 chars)")
+
+    target = safe_text_path(file_path)
+    content = target.read_text(encoding="utf-8", errors="ignore")
+    if source_token not in content:
+        raise ValueError("Source token no longer exists in file")
+
+    backup_stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    backup_target = ASSET_BACKUP_DIR / "text" / backup_stamp / file_path
+    backup_target.parent.mkdir(parents=True, exist_ok=True)
+    backup_target.write_text(content, encoding="utf-8")
+
+    replaced_content = content.replace(source_token, updated)
+    target.write_text(replaced_content, encoding="utf-8")
+
+    return f"Replaced text token in {file_path}"
+
+
 def read_urlencoded(handler: BaseHTTPRequestHandler) -> dict[str, str]:
     length = int(handler.headers.get("Content-Length", "0"))
     payload = handler.rfile.read(length).decode("utf-8", errors="ignore")
@@ -365,7 +466,10 @@ def read_urlencoded(handler: BaseHTTPRequestHandler) -> dict[str, str]:
 
 def render_page(message: str = "", active_tab: str = "infra") -> str:
     assets = discover_image_assets()
-    whitelist = load_whitelist(assets)
+    text_tokens = discover_text_branding_tokens()
+    whitelist_data = load_whitelist_data(assets, text_tokens)
+    whitelist = whitelist_data["assets"]
+    text_whitelist = whitelist_data["text_tokens"]
     env = parse_env_file(ENV_PATH)
 
     branding_assets = [a for a in assets if a["is_branding"]]
@@ -410,8 +514,50 @@ def render_page(message: str = "", active_tab: str = "infra") -> str:
             )
         return "\n".join(rows)
 
+    def text_rows(items: list[dict[str, object]]) -> str:
+        rows = []
+        for token in items:
+            token_id = str(token["id"])
+            file_path = str(token["file_path"])
+            original = str(token["token"])
+            count = int(token["occurrences"])
+            line_no = int(token["line"])
+            whitelisted = token_id in text_whitelist
+
+            action_html = (
+                f"<form method='post' action='/api/text/whitelist/remove' class='inline-form'>"
+                f"<input type='hidden' name='token_id' value='{html.escape(token_id)}'>"
+                f"<button type='submit' class='danger'>Remove</button></form>"
+                if whitelisted
+                else f"<form method='post' action='/api/text/whitelist/add' class='inline-form'>"
+                f"<input type='hidden' name='token_id' value='{html.escape(token_id)}'>"
+                f"<button type='submit'>Allow</button></form>"
+            )
+
+            replace_html = (
+                f"<form method='post' action='/api/text/replace' class='inline-form'>"
+                f"<input type='hidden' name='token_id' value='{html.escape(token_id)}'>"
+                f"<input type='text' name='replacement_text' value='{html.escape(original)}' required>"
+                f"<button type='submit'>Replace</button>"
+                f"</form>"
+                if whitelisted
+                else "<span class='muted'>Whitelist first</span>"
+            )
+
+            rows.append(
+                "<tr>"
+                f"<td><code>{html.escape(file_path)}:{line_no}</code></td>"
+                f"<td><code>{html.escape(original)}</code></td>"
+                f"<td>{count}</td>"
+                f"<td>{'yes' if whitelisted else 'no'}<br>{action_html}</td>"
+                f"<td>{replace_html}</td>"
+                "</tr>"
+            )
+        return "\n".join(rows)
+
     infra_active = "active" if active_tab == "infra" else ""
     branding_active = "active" if active_tab == "branding" else ""
+    text_active = "active" if active_tab == "text" else ""
 
     return f"""<!doctype html>
 <html>
@@ -453,6 +599,7 @@ def render_page(message: str = "", active_tab: str = "infra") -> str:
     <div class='tabs'>
       <a class='tab {infra_active}' href='/?tab=infra'>Infrastructure</a>
       <a class='tab {branding_active}' href='/?tab=branding'>Branding</a>
+      <a class='tab {text_active}' href='/?tab=text'>Text Branding</a>
     </div>
 
     <section id='infra' class='panel {infra_active}'>
@@ -489,6 +636,19 @@ def render_page(message: str = "", active_tab: str = "infra") -> str:
         </thead>
         <tbody>
           {asset_rows(assets)}
+        </tbody>
+      </table>
+    </section>
+
+    <section id='text' class='panel {text_active}'>
+      <h3>Text Branding Tokens</h3>
+      <p class='small'>Detected tokens: {len(text_tokens)} | Whitelisted: {len(text_whitelist)} | Flow: whitelist first, then replace.</p>
+      <table>
+        <thead>
+          <tr><th>Location</th><th>Token</th><th>Occurrences</th><th>Whitelist</th><th>Replace</th></tr>
+        </thead>
+        <tbody>
+          {text_rows(text_tokens)}
         </tbody>
       </table>
     </section>
@@ -566,15 +726,58 @@ class FormHandler(BaseHTTPRequestHandler):
                 if asset_rel not in known:
                     raise ValueError("unknown asset")
 
-                wl = load_whitelist(assets)
+                text_tokens = discover_text_branding_tokens()
+                wl_data = load_whitelist_data(assets, text_tokens)
+                wl = wl_data["assets"]
                 if self.path.endswith("/add"):
                     wl.add(asset_rel)
                 else:
                     wl.discard(asset_rel)
-                save_whitelist(wl)
+                save_whitelist_data(wl, wl_data["text_tokens"])
                 self._redirect("Whitelist updated", tab="branding")
             except Exception as exc:
                 self._redirect(f"Error: {exc}", tab="branding")
+            return
+
+        if self.path in {"/api/text/whitelist/add", "/api/text/whitelist/remove"}:
+            try:
+                data = self._read_form_urlencoded()
+                token_id = data.get("token_id", "").strip()
+                if not token_id:
+                    raise ValueError("token_id required")
+
+                assets = discover_image_assets()
+                text_tokens = discover_text_branding_tokens()
+                known = {str(t["id"]) for t in text_tokens}
+                if token_id not in known:
+                    raise ValueError("unknown text token")
+
+                wl_data = load_whitelist_data(assets, text_tokens)
+                if self.path.endswith("/add"):
+                    wl_data["text_tokens"].add(token_id)
+                else:
+                    wl_data["text_tokens"].discard(token_id)
+                save_whitelist_data(wl_data["assets"], wl_data["text_tokens"])
+                self._redirect("Text whitelist updated", tab="text")
+            except Exception as exc:
+                self._redirect(f"Error: {exc}", tab="text")
+            return
+
+        if self.path == "/api/text/replace":
+            try:
+                data = self._read_form_urlencoded()
+                token_id = data.get("token_id", "").strip()
+                replacement_text = data.get("replacement_text", "")
+                if not token_id:
+                    raise ValueError("token_id required")
+
+                assets = discover_image_assets()
+                text_tokens = discover_text_branding_tokens()
+                wl_data = load_whitelist_data(assets, text_tokens)
+                message = replace_text_token(token_id, replacement_text, text_tokens, wl_data["text_tokens"])
+                self._redirect(message, tab="text")
+            except Exception as exc:
+                self._redirect(f"Error: {exc}", tab="text")
             return
 
         if self.path == "/api/replace":
@@ -613,7 +816,8 @@ class FormHandler(BaseHTTPRequestHandler):
                     raise ValueError("asset_rel missing")
 
                 assets = discover_image_assets()
-                wl = load_whitelist(assets)
+                text_tokens = discover_text_branding_tokens()
+                wl = load_whitelist_data(assets, text_tokens)["assets"]
                 message = replace_asset(asset_rel, upload_name, upload_bytes, wl)
                 self._redirect(message, tab="branding")
             except Exception as exc:
@@ -627,7 +831,7 @@ def run_form_server(port: int) -> None:
     validate_port(port, "Form server port")
     server = HTTPServer(("0.0.0.0", port), FormHandler)
     print(f"[ok] Form UI: http://localhost:{port}")
-    print("[info] Tabs: Infrastructure + Branding (whitelabeling)")
+    print("[info] Tabs: Infrastructure + Branding + Text Branding")
     print("[info] Press Ctrl+C to stop")
     try:
         server.serve_forever()

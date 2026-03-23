@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+"""CLI utility to configure and manage MiroFish infrastructure locally."""
+
 import argparse
 import datetime
-import os
 import shutil
 import socket
 import subprocess
@@ -35,13 +36,15 @@ DISALLOWED_PORTS = {
 
 
 def run_command(cmd: list[str], check: bool = True) -> int:
-    process = subprocess.run(cmd, cwd=ROOT)
+    """Run a command from project root and optionally enforce success."""
+    process = subprocess.run(cmd, cwd=ROOT, check=False)
     if check and process.returncode != 0:
         raise RuntimeError(f"Command failed: {' '.join(cmd)}")
     return process.returncode
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a dotenv-style file into key/value mappings."""
     values: dict[str, str] = {}
     if not path.exists():
         return values
@@ -56,6 +59,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 
 def write_env_file(values: dict[str, str]) -> None:
+    """Write a generated .env file and backup any existing version."""
     if ENV_PATH.exists():
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         backup_path = ENV_PATH.with_suffix(f".env.bak.{timestamp}")
@@ -92,12 +96,14 @@ def write_env_file(values: dict[str, str]) -> None:
 
 
 def is_port_in_use(port: int) -> bool:
+    """Return True when the provided localhost TCP port is occupied."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def validate_port(port: int, label: str) -> None:
+    """Validate a port against range, denylist, and current usage."""
     if port <= 0 or port > 65535:
         raise ValueError(f"{label} must be between 1 and 65535")
 
@@ -111,6 +117,7 @@ def validate_port(port: int, label: str) -> None:
 
 
 def ask_text(prompt: str, default: str | None = None, required: bool = False) -> str:
+    """Prompt for text input with optional default and required checks."""
     while True:
         suffix = f" [{default}]" if default else ""
         raw = input(f"{prompt}{suffix}: ").strip()
@@ -123,6 +130,7 @@ def ask_text(prompt: str, default: str | None = None, required: bool = False) ->
 
 
 def ask_yes_no(prompt: str, default_yes: bool = False) -> bool:
+    """Prompt for a yes/no answer and return a boolean result."""
     default_hint = "Y/n" if default_yes else "y/N"
     while True:
         answer = input(f"{prompt} [{default_hint}]: ").strip().lower()
@@ -136,6 +144,7 @@ def ask_yes_no(prompt: str, default_yes: bool = False) -> bool:
 
 
 def ask_port(prompt: str, default: int) -> int:
+    """Prompt for a valid, available port number."""
     while True:
         raw = ask_text(prompt, default=str(default), required=True)
         try:
@@ -147,6 +156,7 @@ def ask_port(prompt: str, default: int) -> int:
 
 
 def generate_compose(frontend_port: int, backend_port: int) -> None:
+    """Generate a docker compose file that maps configured host ports."""
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     content = f"""services:
   mirofish:
@@ -166,15 +176,18 @@ def generate_compose(frontend_port: int, backend_port: int) -> None:
 
 
 def docker_available() -> bool:
+    """Return True when Docker is available in PATH."""
     return shutil.which("docker") is not None
 
 
 def ensure_docker() -> None:
+    """Raise if Docker is not available in the current environment."""
     if not docker_available():
         raise RuntimeError("Docker is required but was not found in PATH")
 
 
 def compose_cmd(*args: str) -> list[str]:
+    """Build a docker compose command targeting the generated file."""
     return [
         "docker",
         "compose",
@@ -185,6 +198,7 @@ def compose_cmd(*args: str) -> list[str]:
 
 
 def ensure_generated_compose_exists() -> None:
+    """Raise if setup has not generated the compose file yet."""
     if not GENERATED_COMPOSE_PATH.exists():
         raise RuntimeError(
             f"Generated compose file not found: {GENERATED_COMPOSE_PATH}. Run setup first."
@@ -192,6 +206,7 @@ def ensure_generated_compose_exists() -> None:
 
 
 def setup_interactive() -> None:
+    """Collect infra inputs interactively and generate local config files."""
     print("== MiroFish Infrastructure Setup ==")
     existing = parse_env_file(ENV_PATH)
 
@@ -269,6 +284,7 @@ def setup_interactive() -> None:
 
 
 def cmd_up() -> None:
+    """Start the managed infrastructure stack in detached mode."""
     ensure_docker()
     ensure_generated_compose_exists()
     run_command(compose_cmd("up", "-d"))
@@ -276,6 +292,7 @@ def cmd_up() -> None:
 
 
 def cmd_down() -> None:
+    """Stop the managed infrastructure stack."""
     ensure_docker()
     ensure_generated_compose_exists()
     run_command(compose_cmd("down"))
@@ -283,6 +300,7 @@ def cmd_down() -> None:
 
 
 def cmd_restart() -> None:
+    """Restart the managed infrastructure stack."""
     ensure_docker()
     ensure_generated_compose_exists()
     run_command(compose_cmd("down"))
@@ -291,12 +309,14 @@ def cmd_restart() -> None:
 
 
 def cmd_status() -> None:
+    """Show status for managed compose services."""
     ensure_docker()
     ensure_generated_compose_exists()
     run_command(compose_cmd("ps"))
 
 
 def cmd_logs(follow: bool = False) -> None:
+    """Show compose logs, optionally streaming continuously."""
     ensure_docker()
     ensure_generated_compose_exists()
     args = ["logs"]
@@ -307,6 +327,7 @@ def cmd_logs(follow: bool = False) -> None:
 
 
 def cmd_doctor() -> None:
+    """Print environment checks for prerequisites and generated files."""
     print("== MiroFish Infra Doctor ==")
     print(f"Project root: {ROOT}")
     print(f"Docker in PATH: {'yes' if docker_available() else 'no'}")
@@ -315,6 +336,7 @@ def cmd_doctor() -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Create and return the CLI argument parser."""
     parser = argparse.ArgumentParser(
         description="MiroFish infrastructure manager with interactive setup form"
     )
@@ -337,7 +359,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port for local form UI (default: 8777)",
     )
 
-    whitelabel_parser = sub.add_parser("whitelabel", help="Launch branding whitelist/replacement form")
+    whitelabel_parser = sub.add_parser(
+        "whitelabel",
+        help="Launch branding whitelist/replacement form",
+    )
     whitelabel_parser.add_argument(
         "--port",
         type=int,
@@ -350,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    """Dispatch CLI commands and normalize error handling."""
     parser = build_parser()
     args = parser.parse_args()
 
@@ -379,7 +405,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\n[info] Interrupted by user")
         return 130
-    except Exception as exc:
+    except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
         print(f"[fatal] {exc}")
         return 1
 

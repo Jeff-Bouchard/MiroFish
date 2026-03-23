@@ -198,6 +198,13 @@ Branding tab includes:
 - Whitelist-first replacement flow with browse upload buttons
 - Public-safe checks for file type, upload size limit, and aspect-ratio compatibility
 
+Text Branding tab includes:
+
+- Automatic discovery of branding text tokens (for example `MIROFISH` and slogans)
+- File path, line number, and occurrence count for each token
+- Whitelist-first text replacement flow
+- Backup before write, so rollback is possible
+
 ### Option 2: Docker Deployment
 
 ```bash
