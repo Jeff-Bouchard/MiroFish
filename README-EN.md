@@ -71,6 +71,7 @@ Welcome to visit our online demo environment and experience a prediction simulat
 <a href="https://www.bilibili.com/video/BV1VYBsBHEMY/" target="_blank"><img src="./static/image/武大模拟演示封面.png" alt="MiroFish Demo Video" width="75%"/></a>
 
 Click the image to watch the complete demo video for prediction using BettaFish-generated "Wuhan University Public Opinion Report"
+
 </div>
 
 ### 2. Dream of the Red Chamber Lost Ending Simulation
@@ -79,6 +80,7 @@ Click the image to watch the complete demo video for prediction using BettaFish-
 <a href="https://www.bilibili.com/video/BV1cPk3BBExq" target="_blank"><img src="./static/image/红楼梦模拟推演封面.jpg" alt="MiroFish Demo Video" width="75%"/></a>
 
 Click the image to watch MiroFish's deep prediction of the lost ending based on hundreds of thousands of words from the first 80 chapters of "Dream of the Red Chamber"
+
 </div>
 
 > **Financial Prediction**, **Political News Prediction** and more examples coming soon...
@@ -97,11 +99,11 @@ Click the image to watch MiroFish's deep prediction of the lost ending based on 
 
 #### Prerequisites
 
-| Tool | Version | Description | Check Installation |
-|------|---------|-------------|-------------------|
-| **Node.js** | 18+ | Frontend runtime, includes npm | `node -v` |
-| **Python** | ≥3.11, ≤3.12 | Backend runtime | `python --version` |
-| **uv** | Latest | Python package manager | `uv --version` |
+| Tool        | Version      | Description                    | Check Installation |
+| ----------- | ------------ | ------------------------------ | ------------------ |
+| **Node.js** | 18+          | Frontend runtime, includes npm | `node -v`          |
+| **Python**  | ≥3.11, ≤3.12 | Backend runtime                | `python --version` |
+| **uv**      | Latest       | Python package manager         | `uv --version`     |
 
 #### 1. Configure Environment Variables
 
@@ -152,6 +154,7 @@ npm run dev
 ```
 
 **Service URLs:**
+
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:5001`
 
@@ -161,6 +164,39 @@ npm run dev
 npm run backend   # Start backend only
 npm run frontend  # Start frontend only
 ```
+
+#### 4. Turnkey Infrastructure Manager (Interactive Form)
+
+Use the built-in manager script to configure all required inputs and operate MiroFish with Docker:
+
+```bash
+# Interactive setup form (required keys + safe host ports)
+npm run infra:setup
+
+# Start / stop / inspect
+npm run infra:up
+npm run infra:down
+npm run infra:status
+npm run infra:logs
+
+# Launch tabbed form with Branding for whitelabeling
+npm run infra:whitelabel
+```
+
+The setup form collects:
+
+- `LLM_API_KEY` (required)
+- `ZEP_API_KEY` (required)
+- `LLM_BASE_URL`, `LLM_MODEL_NAME` (recommended)
+- Optional `LLM_BOOST_*` values
+- Frontend/backend host ports (validated for availability)
+
+Branding tab includes:
+
+- Automatic listing of all image assets and branding elements
+- Dimensions (`W×H`), ratio, file size, and usage references
+- Whitelist-first replacement flow with browse upload buttons
+- Public-safe checks for file type, upload size limit, and aspect-ratio compatibility
 
 ### Option 2: Docker Deployment
 
